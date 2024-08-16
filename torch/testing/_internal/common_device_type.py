@@ -25,6 +25,7 @@ from torch.testing._internal.common_utils import (
     _TestParametrizer,
     clear_tracked_input,
     compose_parametrize_fns,
+    DEVICE_LIST_SUPPORT_PROFILING_TEST,
     dtype_name,
     get_tracked_input,
     IS_FBCODE,
@@ -372,7 +373,7 @@ class DeviceTypeTestBase(TestCase):
         try:
             return cls.get_primary_device()
         except Exception:
-            # For CUDATestBase, XLATestBase, and possibly others, the primary device won't be available
+            # For CUDATestBase, XPUTestBase, XLATestBase, and possibly others, the primary device won't be available
             # until setUpClass() sets it. Call that manually here if needed.
             if hasattr(cls, "setUpClass"):
                 cls.setUpClass()
@@ -655,7 +656,7 @@ class XPUTestBase(DeviceTypeTestBase):
 
     @classmethod
     def setUpClass(cls):
-        cls.primary_device = "xpu:0"
+        cls.primary_device = f"xpu:{torch.xpu.current_device()}"
 
     def _should_stop_test_suite(self):
         return False
@@ -724,6 +725,8 @@ def get_device_type_test_bases():
         test_bases.append(CPUTestBase)
         if torch.cuda.is_available():
             test_bases.append(CUDATestBase)
+        if torch.xpu.is_available():
+            test_bases.append(XPUTestBase)
 
         if is_privateuse1_backend_available():
             test_bases.append(PrivateUse1TestBase)
@@ -1424,6 +1427,19 @@ def onlyNativeDeviceTypesAnd(devices=None):
         return only_fn
 
     return decorator
+
+
+# Only runs the profiler test on the registered device type in DEVICE_LIST_SUPPORT_PROFILING_TEST
+def onlyDeviceTypesSupportProfilingTest(fn):
+    @wraps(fn)
+    def only_fn(self, *args, **kwargs):
+        if self.device_type not in DEVICE_LIST_SUPPORT_PROFILING_TEST:
+            reason = f"onlyNativeDeviceTypesForProfiling: doesn't run on {self.device_type}. If the device supports torch profiler and plans to test cases, please add the device into the DEVICE_LIST_SUPPORT_PROFILING_TEST"
+            raise unittest.SkipTest(reason)
+
+        return fn(self, *args, **kwargs)
+
+    return only_fn
 
 
 # Specifies per-dtype precision overrides.
