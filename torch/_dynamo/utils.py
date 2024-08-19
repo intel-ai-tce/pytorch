@@ -3138,6 +3138,11 @@ def set_torch_function_mode_stack(stack):
         _push_on_torch_function_stack(mode)
 
 
+def clear_torch_function_mode_stack():
+    for i in range(_len_torch_function_stack()):
+        _pop_torch_function_stack()
+
+
 def verify_guard_fn_signature(value):
     fn = value.__metadata_guard__
     sig = inspect.signature(fn)

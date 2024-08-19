@@ -2188,7 +2188,7 @@ class CheckFunctionManager:
         w_builder = None
 
         self.torch_function_mode_stack = (
-            output_graph.torch_function_mode_stack if output_graph else None
+            torch.overrides._get_current_function_mode_stack()
         )
 
         def source_ref(source):
