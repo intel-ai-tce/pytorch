@@ -11,6 +11,7 @@ import struct
 import sys
 import tarfile
 import tempfile
+import threading
 import warnings
 from contextlib import closing, contextmanager
 from enum import Enum
@@ -83,6 +84,13 @@ if not IS_WINDOWS:
     from mmap import MAP_PRIVATE, MAP_SHARED
 else:
     MAP_SHARED, MAP_PRIVATE = None, None  # type: ignore[assignment]
+
+
+# _serialization_tls is used to store thread local state specific to serialization
+# that needs to be propagated to other files, in particular we use this for
+# (1) map_location (needed for wrapper subclasses/third party devices to torch._utils)
+# (2) metadata_only (needed for torch.Tensor.__reduce_ex__)
+_serialization_tls = threading.local()
 
 
 class SourceChangeWarning(Warning):
@@ -729,13 +737,15 @@ def save(
     pickle_protocol: int = DEFAULT_PROTOCOL,
     _use_new_zipfile_serialization: bool = True,
     _disable_byteorder_record: bool = False,
+    *,
+    metadata_only: bool = False,
 ) -> None:
     # Reference: https://github.com/pytorch/pytorch/issues/54354
     # The first line of this docstring overrides the one Sphinx generates for the
     # documentation. We need it so that Sphinx doesn't leak `pickle`s path from
     # the build environment (e.g. `<module 'pickle' from '/leaked/path').
 
-    """save(obj, f, pickle_module=pickle, pickle_protocol=DEFAULT_PROTOCOL, _use_new_zipfile_serialization=True)
+    """save(obj, f, pickle_module=pickle, pickle_protocol=DEFAULT_PROTOCOL, _use_new_zipfile_serialization=True, *, metadata_only=False)  # noqa: B950
 
     Saves an object to a disk file.
 
@@ -747,6 +757,9 @@ def save(
            os.PathLike object containing a file name
         pickle_module: module used for pickling metadata and objects
         pickle_protocol: can be specified to override the default protocol
+        metadata_only: specifies whether to reserve space for storages in
+            the checkpoint but skip writing their bytes, has special semantic of
+            creating space for storages when FakeTensors are passed
 
     .. note::
         A common PyTorch convention is to save tensors using .pt file extension.
@@ -782,9 +795,14 @@ def save(
                 pickle_module,
                 pickle_protocol,
                 _disable_byteorder_record,
+                metadata_only,
             )
             return
     else:
+        if metadata_only:
+            raise RuntimeError(
+                "Cannot use metadata_only=True with _use_new_zipfile_serialization=False"
+            )
         with _open_file_like(f, "wb") as opened_file:
             _legacy_save(obj, opened_file, pickle_module, pickle_protocol)
 
@@ -943,7 +961,14 @@ def _legacy_save(obj, f, pickle_module, pickle_protocol) -> None:
         )
 
 
-def _save(obj, zip_file, pickle_module, pickle_protocol, _disable_byteorder_record):
+def _save(
+    obj,
+    zip_file,
+    pickle_module,
+    pickle_protocol,
+    _disable_byteorder_record,
+    metadata_only,
+):
     serialized_storages = {}
     id_map: Dict[int, str] = {}
 
@@ -978,7 +1003,7 @@ def _save(obj, zip_file, pickle_module, pickle_protocol, _disable_byteorder_reco
             # If storage is allocated, ensure that any other saved storages
             # pointing to the same data all have the same dtype. If storage is
             # not allocated, don't perform this check
-            if storage.data_ptr() != 0:
+            if str(storage.device) != "meta" and storage.data_ptr() != 0:
                 if storage.data_ptr() in storage_dtypes:
                     if storage_dtype != storage_dtypes[storage.data_ptr()]:
                         raise RuntimeError(
@@ -989,7 +1014,10 @@ def _save(obj, zip_file, pickle_module, pickle_protocol, _disable_byteorder_reco
                     storage_dtypes[storage.data_ptr()] = storage_dtype
 
             storage_key = id_map.setdefault(storage._cdata, str(len(id_map)))
-            location = location_tag(storage)
+            if hasattr(obj, "_fake_device") and obj._fake_device is not None:
+                location = str(obj._fake_device)
+            else:
+                location = location_tag(storage)
             serialized_storages[storage_key] = storage
 
             return ("storage", storage_type, storage_key, location, storage_numel)
@@ -1000,7 +1028,9 @@ def _save(obj, zip_file, pickle_module, pickle_protocol, _disable_byteorder_reco
     data_buf = io.BytesIO()
     pickler = pickle_module.Pickler(data_buf, protocol=pickle_protocol)
     pickler.persistent_id = persistent_id
+    _serialization_tls.metadata_only = metadata_only
     pickler.dump(obj)
+    del _serialization_tls.metadata_only
     data_value = data_buf.getvalue()
     zip_file.write_record("data.pkl", data_value, len(data_value))
 
@@ -1015,14 +1045,17 @@ def _save(obj, zip_file, pickle_module, pickle_protocol, _disable_byteorder_reco
     for key in sorted(serialized_storages.keys()):
         name = f"data/{key}"
         storage = serialized_storages[key]
-        # given that we copy things around anyway, we might use storage.cpu()
-        # this means to that to get tensors serialized, you need to implement
-        # .cpu() on the underlying Storage
-        if storage.device.type != "cpu":
-            storage = storage.cpu()
-        # Now that it is on the CPU we can directly copy it into the zip file
         num_bytes = storage.nbytes()
-        zip_file.write_record(name, storage, num_bytes)
+        if metadata_only:
+            zip_file.write_record_metadata(name, num_bytes)
+        else:
+            # given that we copy things around anyway, we might use storage.cpu()
+            # this means to that to get tensors serialized, you need to implement
+            # .cpu() on the underlying Storage
+            if storage.device.type != "cpu":
+                storage = storage.cpu()
+            # Now that it is on the CPU we can directly copy it into the zip file
+            zip_file.write_record(name, storage, num_bytes)
 
 
 def load(
@@ -1746,9 +1779,9 @@ def _load(
     unpickler.persistent_load = persistent_load
     # Needed for tensors where storage device and rebuild tensor device are
     # not connected (wrapper subclasses and tensors rebuilt using numpy)
-    torch._utils._thread_local_state.map_location = map_location
+    _serialization_tls.map_location = map_location
     result = unpickler.load()
-    del torch._utils._thread_local_state.map_location
+    del _serialization_tls.map_location
 
     torch._utils._validate_loaded_sparse_tensors()
     torch._C._log_api_usage_metadata(
