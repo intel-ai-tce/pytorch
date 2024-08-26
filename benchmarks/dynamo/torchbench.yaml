@@ -217,14 +217,19 @@ skip:
       - detectron2_fcos_r_50_fpn
 
   control_flow:
+    # dynamic flow is not supported
     - cm3leon_generate
+    - hf_Reformer
+    # could not guard on data-dependent expression
     - detectron2_fcos_r_50_fpn
+    - doctr_reco_predictor
     - fastNLP_Bert
     - hf_Longformer
-    - hf_Reformer
-    - hf_T5_generate
-    - opacus_cifar10
+    - timm_efficientdet
+    # dynamic slicing on data-dependent value is not supported
     - speech_transformer
+    # copy.deepcopy is not supported
+    - hf_T5_generate
 
   # Models that should only run in --multiprocess mode
   multiprocess:
