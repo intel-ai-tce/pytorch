@@ -56,6 +56,7 @@ from typing import (
 from typing_extensions import Literal, TypeGuard
 
 import torch
+import torch._C._instruction_counter as _instruction_counter
 import torch._functorch.config
 import torch._inductor.config as inductor_config
 import torch.fx.experimental.symbolic_shapes
@@ -3106,3 +3107,39 @@ def get_user_object_from_id(obj_id):
 def store_user_object_weakref(obj):
     obj_id = id(obj)
     user_obj_id_to_weakref[obj_id] = weakref.ref(obj)
+
+
+class CompileTimeInstructionCounter:
+    _counter: int = 0
+    _id: int = -1
+    _depth = 0
+
+    @classmethod
+    def start(cls) -> None:
+        cls._depth = cls._depth + 1
+        if cls._depth == 1:
+            cls._id = _instruction_counter.start()
+
+    @classmethod
+    def end(cls) -> None:
+        cls._depth = cls._depth - 1
+        if cls._depth == 0:
+            cls._counter += _instruction_counter.end(cls._id)
+            cls._id = -1
+
+    @classmethod
+    def clear(cls) -> None:
+        cls._counter = 0
+
+    @classmethod
+    def value(cls) -> int:
+        return cls._counter
+
+    @classmethod
+    @contextmanager
+    def record(cls):
+        try:
+            cls.start()
+            yield
+        finally:
+            cls.end()
