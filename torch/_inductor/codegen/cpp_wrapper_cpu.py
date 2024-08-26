@@ -12,6 +12,10 @@ from sympy import Expr
 import torch
 import torch._inductor.async_compile  # noqa: F401 required to warm up AsyncCompile pools
 import torch._ops
+from torch._inductor.codegen.debug_utils import (
+    aot_inductor_debug_intermediate_tensor_value_level,
+    IntermediateValueDebuggingLevel,
+)
 from torch.fx.experimental.symbolic_shapes import ConvertIntKey, DivideByKey, SymTypes
 
 from .. import config, ir
@@ -1201,8 +1205,8 @@ class CppWrapperCpu(WrapperCodeGen):
 
         wrapped_args = []
         args_to_print = None
-        enable_debug_printer = config.aot_inductor.debug_intermediate_value_printer
-        if enable_debug_printer:
+        enable_debug_printer = aot_inductor_debug_intermediate_tensor_value_level()
+        if enable_debug_printer != IntermediateValueDebuggingLevel.OFF:
             args_to_print = []
 
         for x in args:
@@ -1219,7 +1223,7 @@ class CppWrapperCpu(WrapperCodeGen):
                 ):
                     # TODO: The current way to find a 'tensor' type arg is hacky also as mentioned above
                     # Find a more reliable way to detect tensor kernel args for extern kernel calls
-                    if enable_debug_printer:
+                    if enable_debug_printer != IntermediateValueDebuggingLevel.OFF:
                         if piece.startswith(("buf", "arg")):
                             args_to_print.append(piece)
                     piece = f"convert_arrayref_tensor_to_tensor({piece})"

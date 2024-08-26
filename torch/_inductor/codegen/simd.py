@@ -27,6 +27,9 @@ import sympy
 
 import torch
 import torch._logging
+from torch._inductor.codegen.debug_utils import (
+    aot_inductor_debug_intermediate_tensor_value_level,
+)
 from torch.utils._ordered_set import OrderedSet
 from torch.utils._sympy.functions import FloorDiv, Identity, ModularIndexing
 from torch.utils._sympy.symbol import free_symbol_is_type, symbol_is_type, SymT
@@ -1397,8 +1400,9 @@ class SIMDScheduling(BaseScheduling):
         # debug printing values of intermediate tensors
         # Note: MultiKernel debug printing is not supported for now
         enable_debug_printer = (
-            config.aot_inductor.debug_intermediate_value_printer
-            and not isinstance(final_kernel, MultiKernel)
+            0
+            if isinstance(final_kernel, MultiKernel)
+            else aot_inductor_debug_intermediate_tensor_value_level()
         )
         _, call_args, arg_signatures, _ = (
             final_kernel.args.python_argdefs()

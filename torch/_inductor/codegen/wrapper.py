@@ -533,9 +533,7 @@ class WrapperCodeGen(CodeGen):
         self.multi_kernel_state = MultiKernelState()
 
         # intermediate tensor value printing utility
-        self.debug_printer = DebugPrinterManager(
-            enable_debug_printer=config.aot_inductor.debug_intermediate_value_printer
-        )
+        self.debug_printer = DebugPrinterManager()
 
     def write_constant(self, name: str, hashed: str) -> None:
         self.header.writeline(f"{name} = None  # {hashed}")
